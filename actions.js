@@ -11,6 +11,16 @@ let currentScaleFactor = 0; // Para suavizar cambios en el tamaño
 const smoothingFactor = 0.3; // Factor de suavizado (0-1), más bajo = más suave
 const scaleSmoothing = 0.15; // Factor de suavizado para el cambio de tamaño (más lento que el movimiento)
 
+// Variables para la animación con GSAP
+let fireTl; // Timeline para la animación del fuego
+let fireAnimationActive = false; // Controla si la animación está activa
+// Array para almacenar propiedades de capas múltiples del fuego
+let fireLayersProps = []; // Almacenará propiedades específicas para cada capa del fuego
+// Variables para el cálculo estable de la cercanía
+let lastDistanceFactors = []; // Array para almacenar los últimos valores de distancia
+const distanceHistorySize = 10; // Cantidad de valores históricos a mantener
+let stableDistanceFactor = 1.0; // Factor de distancia estabilizado
+
 const demosSection = document.getElementById("demos");
 let gestureRecognizer;
 let runningMode = "VIDEO";
@@ -68,6 +78,21 @@ function enableCam(event) {
     if (webcamRunning === true) {
         webcamRunning = false;
         enableWebcamButton.innerText = "INICIAR CÁMARA";
+        
+        // Detener animaciones cuando se detiene la cámara
+        if (fireAnimationActive) {
+            fireAnimationActive = false;
+            if (fireTl) {
+                fireTl.kill();
+                fireTl = null;
+            }
+            window.fireLayersProps = null;
+            fireLayersProps = [];
+        }
+        
+        // Reiniciar mediciones de distancia cuando se apaga la cámara
+        lastDistanceFactors = [];
+        stableDistanceFactor = 1.0;
     }
     else {
         webcamRunning = true;
@@ -137,20 +162,58 @@ async function predictWebcam() {
         
         if (results.landmarks && results.landmarks[0]) {
             const landmarks = results.landmarks[0];
-            const palmBase = landmarks[0]; // Base de la palma
-            const middleFinger = landmarks[12]; // Punta del dedo medio
             
-            // Distancia entre la base de la palma y la punta del dedo medio
-            const handWidth = Math.sqrt(
-                Math.pow(palmBase.x - middleFinger.x, 2) +
-                Math.pow(palmBase.y - middleFinger.y, 2)
+            // Usar puntos de referencia más estables en la palma que no varían tanto con los gestos
+            // Usaremos múltiples medidas para mayor estabilidad
+            
+            // 1. Distancia entre base del índice (5) y base del meñique (17)
+            const indexBase = landmarks[5];
+            const pinkyBase = landmarks[17];
+            const palmWidth = Math.sqrt(
+                Math.pow(indexBase.x - pinkyBase.x, 2) +
+                Math.pow(indexBase.y - pinkyBase.y, 2)
             );
             
-            // Calcular el factor de distancia basándonos en un valor de referencia ajustado
-            // 0.15 es un valor de referencia más sensible que el anterior 0.2
-            distanceFactor = handWidth / 0.15;
+            // 2. Distancia entre base de la palma (0) y base del dedo medio (9)
+            const wristPoint = landmarks[0];
+            const middleFingerBase = landmarks[9];
+            const palmHeight = Math.sqrt(
+                Math.pow(wristPoint.x - middleFingerBase.x, 2) +
+                Math.pow(wristPoint.y - middleFingerBase.y, 2)
+            );
             
+            // 3. Calcular un factor de área de la palma (más estable entre gestos)
+            const palmArea = palmWidth * palmHeight * 3.14; // Aproximación del área
+            
+            // Calcular el factor de distancia usando el área de la palma
+            // 0.025 es un valor de referencia calibrado para esta medida
+            const rawDistanceFactor = palmArea / 0.025;
+            
+            // Añadir el nuevo factor al historial
+            lastDistanceFactors.push(rawDistanceFactor);
+            
+            // Mantener solo los últimos N valores
+            if (lastDistanceFactors.length > distanceHistorySize) {
+                lastDistanceFactors.shift(); // Eliminar el valor más antiguo
+            }
+            
+            // Calcular la media de los valores recientes para suavizar cambios bruscos
+            let sum = 0;
+            for (let i = 0; i < lastDistanceFactors.length; i++) {
+                sum += lastDistanceFactors[i];
+            }
+            
+            // Actualizar el factor de distancia estable
+            stableDistanceFactor = sum / lastDistanceFactors.length;
+            
+            // Usar el factor estable como el factor de distancia actual
+            distanceFactor = stableDistanceFactor;
+            
+            // Información para mostrar
             handDistanceInfo = `\nCercanía: ${distanceFactor.toFixed(2)}`;
+            
+            // Añadir información adicional para debugging si es necesario
+            // handDistanceInfo += `\nPalm W: ${palmWidth.toFixed(3)}, H: ${palmHeight.toFixed(3)}`;
         }
         
         gestureOutput.innerText = `Gesto: ${categoryName}\nConfianza: ${categoryScore} %\nMano: ${handedness}${handDistanceInfo}`;
@@ -208,48 +271,243 @@ async function predictWebcam() {
             const fireWidth = baseFireWidth * currentScaleFactor;
             const fireHeight = baseFireHeight * currentScaleFactor;
             
-            // Mostrar información de depuración sobre el tamaño
-            console.log(`Escala: ${currentScaleFactor.toFixed(2)}, Objetivo: ${clampedTargetScale.toFixed(2)}`);
+            // Mostrar información de depuración sobre el tamaño y distancia estable
+            console.log(`Escala: ${currentScaleFactor.toFixed(2)}, Objetivo: ${clampedTargetScale.toFixed(2)}, Cercanía estable: ${stableDistanceFactor.toFixed(2)}`);
             
             if (fireImage.complete && fireImage.naturalHeight !== 0) {
                 canvasCtx.save();
                 
-                // Añadir un ligero efecto de oscilación para simular el fuego
-                // Hacer que la oscilación sea proporcional al tamaño del fuego
-                const wobble = Math.sin(Date.now() / 200) * 5 * currentScaleFactor;
-                
-                // Dibujar una sombra sutil para dar sensación de profundidad
-                canvasCtx.shadowColor = 'rgba(255, 100, 20, 0.5)';
-                canvasCtx.shadowBlur = 15 * currentScaleFactor;
-                canvasCtx.shadowOffsetX = 0;
-                canvasCtx.shadowOffsetY = 0;
-                
-                canvasCtx.drawImage(
-                    fireImage, 
-                    fireX - fireWidth / 2 + wobble, // Centrar en X con oscilación
-                    fireY - fireHeight, // Colocar encima del dedo
-                    fireWidth,
-                    fireHeight
-                );
-                
-                // Si la mano está cerca (fuego grande), añadir un efecto de resplandor
-                // Bajamos el umbral a 1.3 para que el efecto de resplandor aparezca antes
-                if (currentScaleFactor > 1.3) {
-                    // Transparencia basada en la cercanía, con mayor intensidad
-                    canvasCtx.globalAlpha = Math.min((currentScaleFactor - 1.3) * 2.5, 0.8); 
-                    canvasCtx.globalCompositeOperation = 'lighter';
+                // Crear o actualizar la animación GSAP para el fuego
+                if (!fireAnimationActive) {
+                    // Si no hay animación activa, crear una nueva
+                    fireAnimationActive = true;
                     
-                    // El tamaño del resplandor ahora es más proporcional al tamaño del fuego
-                    const glowExtra = 10 * currentScaleFactor;
+                    // Primero eliminamos cualquier animación anterior si existe
+                    if (fireTl) {
+                        fireTl.kill();
+                    }
+                    
+                    // Inicializamos el array de propiedades para las capas
+                    fireLayersProps = [
+                        // Capa principal (más cercana/nítida)
+                        {
+                            wobble: 0,
+                            scaleBoost: 0,
+                            rotation: 0,
+                            glowIntensity: 0,
+                            opacity: 1,
+                            offsetY: 0,
+                            offsetX: 0
+                        },
+                        // Capa media (fondo semi-transparente)
+                        {
+                            wobble: 0,
+                            scaleBoost: 0,
+                            rotation: 0,
+                            glowIntensity: 0,
+                            opacity: 0.7,
+                            offsetY: -5,
+                            offsetX: 5
+                        },
+                        // Capa trasera (más transparente y grande)
+                        {
+                            wobble: 0,
+                            scaleBoost: 0,
+                            rotation: 0,
+                            glowIntensity: 0,
+                            opacity: 0.4,
+                            offsetY: -10,
+                            offsetX: -10
+                        }
+                    ];
+                    
+                    // Crear nueva timeline con repetición infinita
+                    fireTl = gsap.timeline({
+                        repeat: -1
+                    });
+                    
+                    // Animaciones para la capa principal
+                    fireTl.to(fireLayersProps[0], {
+                        wobble: 15 * currentScaleFactor, // Vaivén más pronunciado
+                        duration: 0.7,  // Duración más corta para más velocidad
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0);
+                    
+                    fireTl.to(fireLayersProps[0], {
+                        scaleBoost: 0.12, // Más pulsación
+                        duration: 1.1,
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0);
+                    
+                    fireTl.to(fireLayersProps[0], {
+                        rotation: 4,
+                        duration: 2.2,
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0);
+                    
+                    fireTl.to(fireLayersProps[0], {
+                        glowIntensity: 0.9,
+                        duration: 1.3,
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0);
+                    
+                    // Animaciones para la capa media (con ligero retraso)
+                    fireTl.to(fireLayersProps[1], {
+                        wobble: 20 * currentScaleFactor, // Vaivén más amplio para capa secundaria
+                        duration: 0.9,
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0.1); // Retraso de 0.1s
+                    
+                    fireTl.to(fireLayersProps[1], {
+                        scaleBoost: 0.15,
+                        duration: 1.4,
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0.1);
+                    
+                    fireTl.to(fireLayersProps[1], {
+                        rotation: -5, // Rotación en dirección opuesta
+                        duration: 2.7,
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0.1);
+                    
+                    fireTl.to(fireLayersProps[1], {
+                        glowIntensity: 0.7,
+                        duration: 1.7,
+                        ease: "power1.inOut", // Efecto de intensidad diferente
+                        yoyo: true,
+                        repeat: -1
+                    }, 0.1);
+                    
+                    // Animaciones para la capa trasera (con mayor retraso)
+                    fireTl.to(fireLayersProps[2], {
+                        wobble: 25 * currentScaleFactor, // Vaivén aún más amplio
+                        duration: 1.1,
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0.2); // Retraso de 0.2s
+                    
+                    fireTl.to(fireLayersProps[2], {
+                        scaleBoost: 0.18,
+                        duration: 1.6,
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0.2);
+                    
+                    fireTl.to(fireLayersProps[2], {
+                        rotation: 6, // Rotación más amplia
+                        duration: 3.0,
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0.2);
+                    
+                    fireTl.to(fireLayersProps[2], {
+                        glowIntensity: 0.5,
+                        duration: 2.0,
+                        ease: "power2.inOut", // Otro efecto de suavizado
+                        yoyo: true,
+                        repeat: -1
+                    }, 0.2);
+                    
+                    // Guardar referencia global
+                    window.fireLayersProps = fireLayersProps;
+                }
+                
+                // Verificar que tenemos las propiedades de las capas
+                const layersProps = window.fireLayersProps || fireLayersProps;
+                
+                // Calcular valores base para todas las capas
+                const baseWidth = fireWidth;
+                const baseHeight = fireHeight;
+                
+                // Dibujar las capas en orden inverso (de atrás hacia adelante)
+                for (let i = layersProps.length - 1; i >= 0; i--) {
+                    const layer = layersProps[i];
+                    
+                    // Calcular valores específicos para esta capa
+                    const wobble = layer.wobble || 0;
+                    const scaleBoost = (layer.scaleBoost || 0) + (i * 0.05); // Aumentar tamaño para capas traseras
+                    const rotation = layer.rotation || 0;
+                    const opacity = layer.opacity || 1;
+                    const offsetX = layer.offsetX || 0;
+                    const offsetY = layer.offsetY || 0;
+                    
+                    // Ajustar tamaño según la capa y el factor de escala
+                    const layerScale = currentScaleFactor * (1 + scaleBoost);
+                    const layerWidth = baseWidth * layerScale * (1 + (i * 0.1)); // Capas traseras más grandes
+                    const layerHeight = baseHeight * layerScale * (1 + (i * 0.05));
+                    
+                    canvasCtx.save();
+                    
+                    // Configurar transparencia
+                    canvasCtx.globalAlpha = opacity;
+                    
+                    // Añadir sombra solo para la capa principal
+                    if (i === 0) {
+                        canvasCtx.shadowColor = 'rgba(255, 100, 20, 0.5)';
+                        canvasCtx.shadowBlur = 15 * layerScale;
+                        canvasCtx.shadowOffsetX = 0;
+                        canvasCtx.shadowOffsetY = 0;
+                    }
+                    
+                    // Aplicar rotación
+                    if (rotation) {
+                        canvasCtx.translate(fireX + offsetX, fireY - layerHeight/2 + offsetY);
+                        canvasCtx.rotate((rotation * Math.PI) / 180);
+                        canvasCtx.translate(-(fireX + offsetX), -(fireY - layerHeight/2 + offsetY));
+                    }
+                    
+                    // Dibujar capa de fuego
                     canvasCtx.drawImage(
                         fireImage,
-                        fireX - fireWidth / 2 + wobble - glowExtra/2,
-                        fireY - fireHeight - glowExtra/2,
-                        fireWidth + glowExtra,
-                        fireHeight + glowExtra
+                        fireX - layerWidth/2 + wobble + offsetX,
+                        fireY - layerHeight + offsetY,
+                        layerWidth,
+                        layerHeight
                     );
-                    canvasCtx.globalAlpha = 1.0;
-                    canvasCtx.globalCompositeOperation = 'source-over';
+                    
+                    // Efecto de resplandor para cada capa si corresponde
+                    const glowIntensity = layer.glowIntensity || 0;
+                    const distanceGlowFactor = currentScaleFactor > 1.3 ? 
+                        Math.min((currentScaleFactor - 1.3) * (1.5 - i * 0.3), 0.6) : 0;
+                    
+                    if (glowIntensity > 0.4 || distanceGlowFactor > 0) {
+                        const finalGlowIntensity = Math.max(glowIntensity * 0.3, distanceGlowFactor) * opacity;
+                        
+                        if (finalGlowIntensity > 0.1) {
+                            canvasCtx.globalAlpha = finalGlowIntensity;
+                            canvasCtx.globalCompositeOperation = 'lighter';
+                            
+                            const glowExtra = (10 + i * 5) * layerScale;
+                            canvasCtx.drawImage(
+                                fireImage,
+                                fireX - layerWidth/2 + wobble - glowExtra/2 + offsetX,
+                                fireY - layerHeight - glowExtra/4 + offsetY,
+                                layerWidth + glowExtra,
+                                layerHeight + glowExtra/2
+                            );
+                            
+                            canvasCtx.globalCompositeOperation = 'source-over';
+                        }
+                    }
+                    
+                    canvasCtx.restore();
                 }
                 
                 canvasCtx.shadowColor = 'transparent';
@@ -259,6 +517,20 @@ async function predictWebcam() {
     }
     else {
         gestureOutput.style.display = "none";
+        
+        // Si no hay gestos detectados pero hay una animación activa, detenerla
+        if (fireAnimationActive) {
+            fireAnimationActive = false;
+            if (fireTl) {
+                fireTl.kill();
+                fireTl = null;
+            }
+            window.fireLayersProps = null;
+            fireLayersProps = [];
+        }
+        
+        // No reiniciamos lastDistanceFactors aquí para mantener la estabilidad
+        // de la medición de distancia incluso cuando temporalmente no se detecta un gesto
     }
     
     // Call this function again to keep predicting when the browser is ready.
