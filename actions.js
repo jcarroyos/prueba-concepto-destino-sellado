@@ -155,6 +155,9 @@ async function predictWebcam() {
         // Mostrar el nombre del gesto en la consola para depuración
         console.log("Gesto detectado:", categoryName);
         
+        // NOTA: Solo mostramos el fuego con gestos de tipo "dedo índice apuntando hacia arriba"
+        // Gestos de palma abierta (Open_Palm) o número uno (One) han sido excluidos deliberadamente
+        
         // Calcular distancia de la mano si hay landmarks disponibles
         let handDistanceInfo = "";
         // Valor que usaremos tanto para mostrar información como para escalar la imagen
@@ -218,12 +221,10 @@ async function predictWebcam() {
         
         gestureOutput.innerText = `Gesto: ${categoryName}\nConfianza: ${categoryScore} %\nMano: ${handedness}${handDistanceInfo}`;
         
-        // Si el gesto es "Pointing_Up" (o cualquiera de sus variantes), mostrar la imagen de fuego
+        // Si el gesto es "Pointing_Up" (o cualquiera de sus variantes directas), mostrar la imagen de fuego
         if ((categoryName === "Pointing_Up" || 
              categoryName === "Index_Up" || 
-             categoryName === "Pointing_Up_Finger" || 
-             categoryName === "Open_Palm" || 
-             categoryName === "One") && 
+             categoryName === "Pointing_Up_Finger") && 
              results.landmarks && results.landmarks[0]) {
             const landmarks = results.landmarks[0];
             // Obtener la posición del dedo índice (landmark 8)
