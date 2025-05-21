@@ -4,16 +4,34 @@ import { GestureRecognizer, FilesetResolver, DrawingUtils } from "https://cdn.js
 // Cargar la imagen de fuego
 const fireImage = new Image();
 fireImage.src = 'assets/fire-removebg-preview 1.png';
+
+// Cargar la imagen del ojo
+const eyeImage = new Image();
+eyeImage.src = 'assets/eye_simbol.png';
+
 // Variables para suavizar el movimiento del fuego
 let fireX = 0;
 let fireY = 0;
 let currentScaleFactor = 0; // Para suavizar cambios en el tamaño
+
+// Variables para suavizar el movimiento del ojo
+let eyeX = 0;
+let eyeY = 0;
+let currentEyeScaleFactor = 0; // Para suavizar cambios en el tamaño del ojo
+
 const smoothingFactor = 0.3; // Factor de suavizado (0-1), más bajo = más suave
 const scaleSmoothing = 0.15; // Factor de suavizado para el cambio de tamaño (más lento que el movimiento)
 
 // Variables para la animación con GSAP
 let fireTl; // Timeline para la animación del fuego
 let fireAnimationActive = false; // Controla si la animación está activa
+
+// Variables para la animación del ojo con GSAP
+let eyeTl; // Timeline para la animación del ojo
+let eyeAnimationActive = false; // Controla si la animación del ojo está activa
+// Array para almacenar propiedades de capas del ojo
+let eyeLayersProps = []; // Almacenará propiedades específicas para cada capa del ojo
+
 // Array para almacenar propiedades de capas múltiples del fuego
 let fireLayersProps = []; // Almacenará propiedades específicas para cada capa del fuego
 // Variables para el cálculo estable de la cercanía
@@ -90,6 +108,17 @@ function enableCam(event) {
             fireLayersProps = [];
         }
         
+        // Detener animaciones del ojo cuando se detiene la cámara
+        if (eyeAnimationActive) {
+            eyeAnimationActive = false;
+            if (eyeTl) {
+                eyeTl.kill();
+                eyeTl = null;
+            }
+            window.eyeLayersProps = null;
+            eyeLayersProps = [];
+        }
+        
         // Reiniciar mediciones de distancia cuando se apaga la cámara
         lastDistanceFactors = [];
         stableDistanceFactor = 1.0;
@@ -131,17 +160,19 @@ async function predictWebcam() {
     canvasElement.style.width = videoWidth;
     webcamElement.style.width = videoWidth;
 
+    // Ocultamos los indicadores de puntos de referencia pero mantenemos la detección
     if (results.landmarks) {
-        for (const landmarks of results.landmarks) {
-            drawingUtils.drawConnectors(landmarks, GestureRecognizer.HAND_CONNECTIONS, {
-                color: "#00FF00",
-                lineWidth: 5
-            });
-            drawingUtils.drawLandmarks(landmarks, {
-                color: "#FF0000",
-                lineWidth: 2
-            });
-        }
+        // El código que dibuja los landmarks ha sido comentado para mostrar solo las imágenes PNG
+        // for (const landmarks of results.landmarks) {
+        //     drawingUtils.drawConnectors(landmarks, GestureRecognizer.HAND_CONNECTIONS, {
+        //         color: "#00FF00",
+        //         lineWidth: 5
+        //     });
+        //     drawingUtils.drawLandmarks(landmarks, {
+        //         color: "#FF0000",
+        //         lineWidth: 2
+        //     });
+        // }
     }
     canvasCtx.restore();
     
@@ -154,9 +185,6 @@ async function predictWebcam() {
         
         // Mostrar el nombre del gesto en la consola para depuración
         console.log("Gesto detectado:", categoryName);
-        
-        // NOTA: Solo mostramos el fuego con gestos de tipo "dedo índice apuntando hacia arriba"
-        // Gestos de palma abierta (Open_Palm) o número uno (One) han sido excluidos deliberadamente
         
         // Calcular distancia de la mano si hay landmarks disponibles
         let handDistanceInfo = "";
@@ -214,9 +242,6 @@ async function predictWebcam() {
             
             // Información para mostrar
             handDistanceInfo = `\nCercanía: ${distanceFactor.toFixed(2)}`;
-            
-            // Añadir información adicional para debugging si es necesario
-            // handDistanceInfo += `\nPalm W: ${palmWidth.toFixed(3)}, H: ${palmHeight.toFixed(3)}`;
         }
         
         gestureOutput.innerText = `Gesto: ${categoryName}\nConfianza: ${categoryScore} %\nMano: ${handedness}${handDistanceInfo}`;
@@ -226,6 +251,17 @@ async function predictWebcam() {
              categoryName === "Index_Up" || 
              categoryName === "Pointing_Up_Finger") && 
              results.landmarks && results.landmarks[0]) {
+            // Desactivar animación del ojo si estaba activa, ya que ahora mostramos el fuego
+            if (eyeAnimationActive) {
+                eyeAnimationActive = false;
+                if (eyeTl) {
+                    eyeTl.kill();
+                    eyeTl = null;
+                }
+                window.eyeLayersProps = null;
+                eyeLayersProps = [];
+            }
+            
             const landmarks = results.landmarks[0];
             // Obtener la posición del dedo índice (landmark 8)
             const indexFinger = landmarks[8];
@@ -515,6 +551,233 @@ async function predictWebcam() {
                 canvasCtx.restore();
             }
         }
+        // Si el gesto es "Open_Palm", mostrar la imagen del ojo en el centro de la palma
+        else if (categoryName === "Open_Palm" && results.landmarks && results.landmarks[0]) {
+            // Desactivar animación del fuego si estaba activa, ya que ahora mostramos el ojo
+            if (fireAnimationActive) {
+                fireAnimationActive = false;
+                if (fireTl) {
+                    fireTl.kill();
+                    fireTl = null;
+                }
+                window.fireLayersProps = null;
+                fireLayersProps = [];
+            }
+            
+            const landmarks = results.landmarks[0];
+            
+            // Calcular el centro de la palma usando puntos de la palma
+            // Promediamos varios puntos para obtener un centro más estable
+            // Usamos landmarks 0 (muñeca), 5, 9, 13, 17 (bases de los dedos)
+            const centerPoints = [landmarks[0], landmarks[5], landmarks[9], landmarks[13], landmarks[17]];
+            let sumX = 0, sumY = 0;
+            
+            for (const point of centerPoints) {
+                sumX += point.x;
+                sumY += point.y;
+            }
+            
+            // Posición normalizada a coordenadas del canvas
+            const targetX = (sumX / centerPoints.length) * canvasElement.width;
+            const targetY = (sumY / centerPoints.length) * canvasElement.height;
+            
+            // Aplicar suavizado al movimiento del ojo
+            if (eyeX === 0 && eyeY === 0) {
+                // Primera detección, inicializar posición
+                eyeX = targetX;
+                eyeY = targetY;
+            } else {
+                // Interpolar suavemente la posición
+                eyeX = eyeX + (targetX - eyeX) * smoothingFactor;
+                eyeY = eyeY + (targetY - eyeY) * smoothingFactor;
+            }
+            
+            // Usar el distanceFactor que ya calculamos anteriormente
+            // Ajustes básicos para el tamaño del ojo
+            const baseEyeWidth = 100;
+            const baseEyeHeight = 100;
+            
+            // Factor de escala para el ojo basado en la distancia
+            const targetEyeScaleFactor = distanceFactor * 1.2; // Ajustar según se necesite
+            const clampedEyeTargetScale = Math.min(Math.max(targetEyeScaleFactor, 0.5), 2.5);
+            
+            // Aplicar suavizado al cambio de escala
+            if (currentEyeScaleFactor === 0) {
+                // Primera detección, inicializar tamaño
+                currentEyeScaleFactor = clampedEyeTargetScale;
+            } else {
+                // Suavizar cambios de tamaño para evitar saltos
+                currentEyeScaleFactor = currentEyeScaleFactor + (clampedEyeTargetScale - currentEyeScaleFactor) * scaleSmoothing;
+            }
+            
+            // Calcular dimensiones finales
+            const eyeWidth = baseEyeWidth * currentEyeScaleFactor;
+            const eyeHeight = baseEyeHeight * currentEyeScaleFactor;
+            
+            // Mostrar información de depuración
+            console.log(`Ojo - Escala: ${currentEyeScaleFactor.toFixed(2)}, Cercanía: ${distanceFactor.toFixed(2)}`);
+            
+            if (eyeImage.complete && eyeImage.naturalHeight !== 0) {
+                canvasCtx.save();
+                
+                // Crear o actualizar la animación GSAP para el ojo
+                if (!eyeAnimationActive) {
+                    // Si no hay animación activa, crear una nueva
+                    eyeAnimationActive = true;
+                    
+                    // Eliminar cualquier animación anterior
+                    if (eyeTl) {
+                        eyeTl.kill();
+                    }
+                    
+                    // Inicializar array de propiedades para las capas del ojo
+                    eyeLayersProps = [
+                        // Capa principal (más nítida)
+                        {
+                            rotation: 0,
+                            pulsation: 0,
+                            glowIntensity: 0,
+                            opacity: 1,
+                            offsetX: 0,
+                            offsetY: 0
+                        },
+                        // Capa de aura (efecto de energía)
+                        {
+                            rotation: 0,
+                            pulsation: 0,
+                            glowIntensity: 0,
+                            opacity: 0.6,
+                            offsetX: 0,
+                            offsetY: 0
+                        }
+                    ];
+                    
+                    // Crear nueva timeline con repetición infinita
+                    eyeTl = gsap.timeline({
+                        repeat: -1
+                    });
+                    
+                    // Animación para la capa principal
+                    eyeTl.to(eyeLayersProps[0], {
+                        rotation: 360,  // Rotación completa
+                        duration: 20,   // Rotación lenta
+                        ease: "none",
+                        repeat: -1
+                    }, 0);
+                    
+                    eyeTl.to(eyeLayersProps[0], {
+                        pulsation: 0.15,  // Efecto de latido
+                        duration: 1.5,
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0);
+                    
+                    eyeTl.to(eyeLayersProps[0], {
+                        glowIntensity: 0.8,
+                        duration: 2.1,
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0);
+                    
+                    // Animación para la capa de aura (en dirección contraria)
+                    eyeTl.to(eyeLayersProps[1], {
+                        rotation: -360,  // Rotación en sentido opuesto
+                        duration: 25,    // Más lenta que la capa principal
+                        ease: "none",
+                        repeat: -1
+                    }, 0);
+                    
+                    eyeTl.to(eyeLayersProps[1], {
+                        pulsation: 0.25,  // Pulsación más pronunciada
+                        duration: 2.2,
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0);
+                    
+                    eyeTl.to(eyeLayersProps[1], {
+                        glowIntensity: 0.9,
+                        duration: 1.8,
+                        ease: "sine.inOut",
+                        yoyo: true,
+                        repeat: -1
+                    }, 0);
+                    
+                    // Guardar referencia global
+                    window.eyeLayersProps = eyeLayersProps;
+                }
+                
+                // Verificar que tenemos las propiedades de las capas
+                const layersProps = window.eyeLayersProps || eyeLayersProps;
+                
+                // Dibujar las capas del ojo en orden inverso (atrás hacia adelante)
+                for (let i = layersProps.length - 1; i >= 0; i--) {
+                    const layer = layersProps[i];
+                    
+                    // Obtener propiedades de la capa
+                    const rotation = layer.rotation || 0;
+                    const pulsation = layer.pulsation || 0;
+                    const glowIntensity = layer.glowIntensity || 0;
+                    const opacity = layer.opacity || 1;
+                    const offsetX = layer.offsetX || 0;
+                    const offsetY = layer.offsetY || 0;
+                    
+                    // Ajustar escala según la capa y efecto de pulsación
+                    const layerScale = currentEyeScaleFactor * (1 + pulsation) * (i === 1 ? 1.3 : 1); // Capa de aura más grande
+                    const layerWidth = eyeWidth * layerScale;
+                    const layerHeight = eyeHeight * layerScale;
+                    
+                    canvasCtx.save();
+                    
+                    // Configurar opacidad
+                    canvasCtx.globalAlpha = opacity;
+                    
+                    // Efectos de resplandor para la capa principal
+                    if (i === 0) {
+                        canvasCtx.shadowColor = 'rgba(0, 150, 255, 0.5)';
+                        canvasCtx.shadowBlur = 15 * layerScale;
+                    }
+                    
+                    // Aplicar rotación desde el centro del ojo
+                    canvasCtx.translate(eyeX + offsetX, eyeY + offsetY);
+                    canvasCtx.rotate((rotation * Math.PI) / 180);
+                    canvasCtx.translate(-(eyeX + offsetX), -(eyeY + offsetY));
+                    
+                    // Dibujar la capa del ojo
+                    canvasCtx.drawImage(
+                        eyeImage,
+                        eyeX - layerWidth/2 + offsetX,
+                        eyeY - layerHeight/2 + offsetY,
+                        layerWidth,
+                        layerHeight
+                    );
+                    
+                    // Efecto de resplandor adicional si corresponde
+                    if (glowIntensity > 0.4) {
+                        canvasCtx.globalAlpha = glowIntensity * opacity * 0.6;
+                        canvasCtx.globalCompositeOperation = 'lighter';
+                        
+                        const glowExtra = 20 * layerScale;
+                        canvasCtx.drawImage(
+                            eyeImage,
+                            eyeX - (layerWidth + glowExtra)/2 + offsetX,
+                            eyeY - (layerHeight + glowExtra)/2 + offsetY,
+                            layerWidth + glowExtra,
+                            layerHeight + glowExtra
+                        );
+                        
+                        canvasCtx.globalCompositeOperation = 'source-over';
+                    }
+                    
+                    canvasCtx.restore();
+                }
+                
+                canvasCtx.shadowColor = 'transparent';
+                canvasCtx.restore();
+            }
+        }
     }
     else {
         gestureOutput.style.display = "none";
@@ -528,6 +791,17 @@ async function predictWebcam() {
             }
             window.fireLayersProps = null;
             fireLayersProps = [];
+        }
+        
+        // Si no hay gestos detectados pero hay una animación de ojo activa, detenerla
+        if (eyeAnimationActive) {
+            eyeAnimationActive = false;
+            if (eyeTl) {
+                eyeTl.kill();
+                eyeTl = null;
+            }
+            window.eyeLayersProps = null;
+            eyeLayersProps = [];
         }
         
         // No reiniciamos lastDistanceFactors aquí para mantener la estabilidad
